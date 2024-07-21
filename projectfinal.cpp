@@ -1,0 +1,286 @@
+#include <GL/glut.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <stdbool.h>
+
+#define MAX_POINTS 10
+#define MAX_CLUSTERS 5
+#define MAX_ITERATIONS 100
+
+typedef struct {
+    float x, y;
+} Point;
+
+Point points[MAX_POINTS];
+Point centroids[MAX_CLUSTERS];
+int labels[MAX_POINTS];
+int num_points, num_clusters;
+bool show_clusters = false;
+bool show_details = false;
+bool show_graph = false;
+
+float cluster_colors[MAX_CLUSTERS][3] = {
+    {1.0, 0.0, 0.0},  // Red
+    {0.0, 1.0, 0.0},  // Green
+    {0.0, 0.0, 1.0},  // Blue
+    {1.0, 1.0, 0.0},  // Yellow
+    {1.0, 0.0, 1.0}   // Magenta
+};
+
+void display();
+void init();
+void reshape(int, int);
+void mouse(int, int, int, int);
+void generateRandomPoints();
+void kmeansClustering();
+float calculateDistance(Point, Point);
+void drawText(const char*, float, float);
+void drawColoredText(const char*, float, float, float, float, float);
+void drawAxis();
+void drawGraphLines();
+void drawAxisLabels();
+void drawLegend();
+
+int main(int argc, char** argv) {
+    printf("Enter the number of points (max 10): ");
+    scanf_s("%d", &num_points);
+    printf("Enter the number of clusters: ");
+    scanf_s("%d", &num_clusters);
+
+    if (num_points > MAX_POINTS || num_clusters > MAX_CLUSTERS) {
+        printf("Exceeded maximum points or clusters limit.\n");
+        return -1;
+    }
+
+    generateRandomPoints();
+
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
+    glutInitWindowPosition(200, 100);
+    glutInitWindowSize(800, 600);
+    glutCreateWindow("K-Means Clustering Algorithm");
+    glutDisplayFunc(display);
+    glutReshapeFunc(reshape);
+    glutMouseFunc(mouse);
+    init();
+    glutMainLoop();
+    return 0;
+}
+
+void init() {
+    glClearColor(0.9, 0.9, 0.9, 1.0);  //light gray
+    glPointSize(10.0);  
+    kmeansClustering();  
+}
+
+void reshape(int w, int h) {
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluOrtho2D(0, w, 0, h);
+    glMatrixMode(GL_MODELVIEW);
+}
+
+void display() {
+    glClear(GL_COLOR_BUFFER_BIT);
+    glLoadIdentity();
+
+    if (!show_clusters && !show_details && !show_graph) {
+        // Welcome page
+        drawColoredText("K-Means Clustering Visualization", 300, 350, 0.1, 0.1, 0.6);
+        drawColoredText("Name: Himanshu, Sanvi.K", 350, 300, 0.1, 0.6, 0.1);
+        drawColoredText("Click to start...", 350, 250, 0.6, 0.1, 0.1);
+    }
+    else if (show_clusters && !show_details && !show_graph) {
+        // Point details page
+        drawColoredText("Point Details", 350, 550, 0.1, 0.1, 0.6);
+        for (int i = 0; i < num_points; i++) {
+            float r = cluster_colors[labels[i]][0];
+            float g = cluster_colors[labels[i]][1];
+            float b = cluster_colors[labels[i]][2];
+            char buffer[200];
+            sprintf_s(buffer, sizeof(buffer), "Point %d: (%.2f, %.2f) - Cluster %d", i + 1, points[i].x, points[i].y, labels[i] + 1);
+            drawColoredText(buffer, 50, 500 - i * 30, r, g, b);
+        }
+        drawColoredText("Left Click to see the graph", 350, 50, 0.1, 0.1, 0.6);
+    }
+    else if (show_graph) {
+        // Draw graph box
+        glColor3f(0.0, 0.0, 0.0);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(50, 100);
+        glVertex2f(750, 100);
+        glVertex2f(750, 550);
+        glVertex2f(50, 550);
+        glEnd();
+
+        drawAxis();
+        drawGraphLines();
+        drawAxisLabels();
+        drawLegend();
+
+        // Draw points
+        for (int i = 0; i < num_points; i++) {
+            glColor3f(cluster_colors[labels[i]][0], cluster_colors[labels[i]][1], cluster_colors[labels[i]][2]);
+            glBegin(GL_POINTS);
+            glVertex2f(points[i].x, points[i].y);
+            glEnd();
+        }
+        // Draw centroids
+        glColor3f(0.0, 0.0, 0.0);  
+        for (int i = 0; i < num_clusters; i++) {
+            glBegin(GL_POINTS);
+            glVertex2f(centroids[i].x, centroids[i].y);
+            glEnd();
+        }
+    }
+
+    glutSwapBuffers();
+}
+
+void mouse(int button, int state, int x, int y) {
+    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
+        if (!show_clusters && !show_details && !show_graph) {
+            show_clusters = true;
+        }
+        else if (show_clusters && !show_details && !show_graph) {
+            show_graph = true;
+        }
+        glutPostRedisplay();
+    }
+}
+
+void generateRandomPoints() {
+    for (int i = 0; i < num_points; i++) {
+        points[i].x = 100 + rand() % 650; 
+        points[i].y = 150 + rand() % 400;  
+    }
+    for (int i = 0; i < num_clusters; i++) {
+        centroids[i].x = 100 + rand() % 650;  
+        centroids[i].y = 150 + rand() % 400;  
+    }
+}
+
+float calculateDistance(Point a, Point b) {
+    return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+void kmeansClustering() {
+    int iterations = 0;
+    int changed;
+
+    do {
+        changed = 0;
+
+        // Assign points to the nearest centroid
+        for (int i = 0; i < num_points; i++) {
+            float min_dist = calculateDistance(points[i], centroids[0]);
+            int label = 0;
+            for (int j = 1; j < num_clusters; j++) {
+                float dist = calculateDistance(points[i], centroids[j]);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    label = j;
+                }
+            }
+            if (labels[i] != label) {
+                labels[i] = label;
+                changed = 1;
+            }
+        }
+
+        // Update centroids
+        Point new_centroids[MAX_CLUSTERS] = { 0 };
+        int counts[MAX_CLUSTERS] = { 0 };
+
+        for (int i = 0; i < num_points; i++) {
+            new_centroids[labels[i]].x += points[i].x;
+            new_centroids[labels[i]].y += points[i].y;
+            counts[labels[i]]++;
+        }
+
+        for (int i = 0; i < num_clusters; i++) {
+            if (counts[i] != 0) {
+                centroids[i].x = new_centroids[i].x / counts[i];
+                centroids[i].y = new_centroids[i].y / counts[i];
+            }
+        }
+
+        iterations++;
+    } while (changed && iterations < MAX_ITERATIONS);
+}
+
+void drawText(const char* text, float x, float y) {
+    glColor3f(0.0, 0.0, 0.0);  
+    glRasterPos2f(x, y);
+    while (*text) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *text);
+        text++;
+    }
+}
+
+void drawColoredText(const char* text, float x, float y, float r, float g, float b) {
+    glColor3f(r, g, b);  // Set color for text
+    glRasterPos2f(x, y);
+    while (*text) {
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *text);
+        text++;
+    }
+}
+
+void drawAxis() {
+    glColor3f(0.0, 0.0, 0.0);  // Black color for axis
+    glBegin(GL_LINES);
+    // X-axis
+    glVertex2f(50, 100);
+    glVertex2f(750, 100);
+    // Y-axis
+    glVertex2f(50, 100);
+    glVertex2f(50, 550);
+    glEnd();
+
+    drawColoredText("X-Axis", 730, 110, 0.0, 0.0, 0.0);
+    drawColoredText("Y-Axis", 20, 530, 0.0, 0.0, 0.0);
+}
+
+void drawGraphLines() {
+    glColor3f(0.8, 0.8, 0.8);  
+    glBegin(GL_LINES);
+    for (int i = 100; i <= 550; i += 50) {
+        glVertex2f(50, i);
+        glVertex2f(750, i);
+    }
+    for (int i = 50; i <= 750; i += 50) {
+        glVertex2f(i, 100);
+        glVertex2f(i, 550);
+    }
+    glEnd();
+}
+
+void drawAxisLabels() {
+    char buffer[10];
+    for (int i = 100; i <= 750; i += 50) {
+        sprintf_s(buffer, sizeof(buffer), "%d", i - 50);
+        drawColoredText(buffer, i, 90, 0.0, 0.0, 0.0);  // X-axis labels
+    }
+    for (int i = 100; i <= 550; i += 50) {
+        sprintf_s(buffer, sizeof(buffer), "%d", i - 50);
+        drawColoredText(buffer, 30, i, 0.0, 0.0, 0.0);  // Y-axis labels
+    }
+}
+
+void drawLegend() {
+    for (int i = 0; i < num_clusters; i++) {
+        glColor3f(cluster_colors[i][0], cluster_colors[i][1], cluster_colors[i][2]);
+        glBegin(GL_QUADS);
+        glVertex2f(650, 500 - i * 30);
+        glVertex2f(670, 500 - i * 30);
+        glVertex2f(670, 480 - i * 30);
+        glVertex2f(650, 480 - i * 30);
+        glEnd();
+        char buffer[10];
+        sprintf_s(buffer, sizeof(buffer), "Cluster %d", i + 1);
+        drawColoredText(buffer, 680, 485 - i * 30, 0.0, 0.0, 0.0);
+    }
+}
